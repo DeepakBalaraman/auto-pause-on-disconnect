@@ -19,9 +19,10 @@ runs on a disconnect, on a connect, or both.
 | Wait, then pause | Acts 300 ms after the switch by default, which is enough time for Windows to hand the stream back to the speakers. |
 | Your choice of action | Toggle play/pause, mute the output, or unmute it. |
 | Both directions | React to disconnects, connects, or both. Connects are off by default. |
-| Only when playing | Skip the action when no app has audio running, so the mod never starts playback on its own. |
+| Only when playing | Acts only while an app has audio running, so it never starts playback on its own. On by default. |
 | No double toggles | One unplug raises several device notifications; repeats inside a one second window are folded into a single action. |
-| Lives in Explorer | Runs inside `explorer.exe`, so it is quiet, needs no admin rights, and works with any media app. |
+| Hands off | Switching the output by hand, while the old device is still plugged in, is left alone. |
+| Its own process | Runs in a dedicated Windhawk process instead of inside Explorer, so a problem here cannot take the shell down. |
 
 ## Settings
 
@@ -31,9 +32,9 @@ runs on a disconnect, on a connect, or both.
 | When a device connects | Off | Also act when a newly plugged device becomes the default output. |
 | Audio role to watch | Multimedia | Which default-device role counts: Multimedia, Console, or Both. |
 | Action | Toggle play/pause | Play/pause, mute the default output, or unmute it. |
-| Delay before acting (ms) | 300 | How long Windows gets to move the stream. Raise it if sound still leaks through. |
-| Ignore repeats within (ms) | 1000 | The window used to fold the notifications of a single unplug into one action. |
-| Act only while audio is playing | Off | Instead of toggling, only pause when something is actually playing. |
+| Delay before acting (ms) | 300 | How long Windows gets to move the stream, 0 to 3000. Raise it if sound still leaks through. |
+| Ignore repeats within (ms) | 1000 | The window used to fold the notifications of a single unplug into one action, 0 to 5000. |
+| Act only while audio is playing | On | Skip the action when nothing is playing, which turns play/pause into a real pause. |
 
 ## Requirements
 
@@ -44,16 +45,18 @@ runs on a disconnect, on a connect, or both.
 
 1. In Windhawk, go to the **Mods** tab and click **Create new mod**.
 2. Set the id to `auto-pause-on-disconnect`, replace the template code with the
-   whole of `auto-pause-on-disconnect.cpp`, and click **Compile mod**.
+   whole of `auto-pause-on-disconnect.wh.cpp`, and click **Compile mod**.
 3. Switch the mod on, then open its settings and pick the action.
 
-Windhawk takes care of restarting Explorer when you toggle the mod.
+The mod runs in a small process of its own, so Explorer is not touched and there
+is nothing to restart when you toggle it.
 
 ## Things to know
 
 - **Play/pause is a toggle, not a pause.** If playback was already stopped, the
-  key starts it again. Turn on *Act only while audio is playing* to make it behave
-  like a real pause.
+  key starts it again. *Act only while audio is playing* is on by default for
+  that reason, and the Windows disconnect sound is not counted as playback;
+  turn it off if you would rather the action always ran.
 - **The mute action applies to whatever is default after the switch**, which is
   normally the internal speakers. Plug the headphones back in and they are left
   alone. Turning on *When a device connects* with the unmute action is a handy
@@ -67,18 +70,21 @@ Windhawk takes care of restarting Explorer when you toggle the mod.
 
 ## How it works
 
-The mod loads into `explorer.exe` and registers an `IMMNotificationClient` with
-the Windows Core Audio API. Every time the default multimedia output changes, the
-callback says which device inherited the role, and the mod compares that with the
-devices that were just added or removed to tell a connect from a disconnect.
+The mod runs in its own Windhawk process and registers an `IMMNotificationClient`
+with the Windows Core Audio API. Every time the default multimedia output changes,
+the callback says which device inherited the role, and the mod compares that with
+the devices that were just added or removed to tell a connect from a disconnect.
+A change that fits neither is a manual switch, so the mod checks whether the old
+device is still active and stays quiet if it is.
 
-The callback itself only queues the work: a background thread waits out the
-delay, then sends `VK_MEDIA_PLAY_PAUSE` with `SendInput` or mutes the endpoint
-through `IAudioEndpointVolume`. Nothing runs on the audio service's threads, so a
-slow action can never stall Windows' notification pipeline.
+One thread owns the COM apartment, the enumerator and the callback registration.
+The callback only wakes it; that thread waits out the delay, runs the playback
+check and then sends `VK_MEDIA_PLAY_PAUSE` with `SendInput` or mutes the endpoint
+through `IAudioEndpointVolume`. The wait is on an event, so disabling the mod
+returns at once instead of sitting out the delay.
 
-Turning the mod off unregisters the callback, waits for a pending action to
-finish and releases everything, including the COM apartment, in order.
+Turning the mod off unregisters the callback, joins that thread without a
+timeout and releases everything, including the COM apartment, in order.
 
 ## License
 
